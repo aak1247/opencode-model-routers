@@ -6,19 +6,46 @@
 export type GroupStrategy = "round-robin" | "random" | "failover";
 
 /**
+ * A single model in a group. Supports priority tiers and load-balancing weight.
+ * - `priority` (higher = preferred): selection first restricts to the highest
+ *   priority tier that still has a healthy model. Only when that tier is fully
+ *   exhausted does routing drop to the next tier.
+ * - `weight`: relative traffic share within the same priority tier
+ *   (used by round-robin and random strategies). Default 1.
+ */
+export interface ModelSpec {
+  /** Model id as "provider/model-id". */
+  id: string;
+  /** Relative weight for load balancing within its priority tier. Default: 1. */
+  weight?: number;
+  /** Preference tier; higher values are tried first. Default: 0. */
+  priority?: number;
+}
+
+/** A model entry: plain "provider/model-id" string or a full spec. */
+export type ModelEntry = string | ModelSpec;
+
+/** Normalized model spec (all fields resolved). */
+export interface ResolvedModel {
+  id: string;
+  weight: number;
+  priority: number;
+}
+
+/**
  * A routing group. Models inside a group are load-balanced / retried;
  * groups themselves form a fallback chain (primary → backup → ...).
  */
 export interface RouterGroup {
   /** Unique group name. */
   name: string;
-  /** Models in this group, as "provider/model-id". */
-  models: string[];
+  /** Models in this group. Strings are shorthand for `{ id }`. */
+  models: (string | ModelSpec)[];
   /**
    * Within-group strategy:
-   *  - "round-robin": pick next model in rotation per request
-   *  - "random": pick a random healthy model
-   *  - "failover": always try the first healthy model, switch only on failure
+   *  - "round-robin": pick next model in weighted rotation per request
+   *  - "random": pick a random healthy model weighted by `weight`
+   *  - "failover": always try the highest-priority healthy model, switch only on failure
    * Default: "round-robin"
    */
   strategy?: GroupStrategy;

@@ -1,6 +1,6 @@
 {
   "name": "opencode-model-routers",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Group-based model routing, load balancing, retry and fallback plugin for OpenCode. Multiple models can be placed in the same group for load balancing/retry, with group-level fallback chains.",
   "type": "module",
   "main": "dist/index.js",

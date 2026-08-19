@@ -8,7 +8,9 @@ import type {
   SessionRouterState,
   ModelRuntimeState,
   RouterPlan,
-  GroupStrategy
+  GroupStrategy,
+  ModelEntry,
+  ResolvedModel
 } from "./types";
 import { DEFAULT_CONFIG } from "./types";
 
@@ -69,33 +71,90 @@ function getGroupChain(config: RouterPluginConfig, agent: string | undefined): s
   return (config.groups ?? []).map((g) => g.name);
 }
 
+/** Normalize a ModelEntry into a ResolvedModel. */
+export function resolveModelEntry(entry: ModelEntry): ResolvedModel {
+  if (typeof entry === "string") {
+    return { id: entry, weight: 1, priority: 0 };
+  }
+  return {
+    id: entry.id,
+    weight: typeof entry.weight === "number" && entry.weight > 0 ? entry.weight : 1,
+    priority: typeof entry.priority === "number" ? entry.priority : 0
+  };
+}
+
+/** Return the group's models resolved and grouped by priority (highest first). */
+function groupModelsByPriority(group: RouterGroup): { id: string; weight: number; priority: number }[][] {
+  const resolved = group.models.map(resolveModelEntry);
+  const byPriority = new Map<number, ResolvedModel[]>();
+  for (const m of resolved) {
+    if (!byPriority.has(m.priority)) byPriority.set(m.priority, []);
+    byPriority.get(m.priority)!.push(m);
+  }
+  const sortedPriorities = [...byPriority.keys()].sort((a, b) => b - a);
+  return sortedPriorities.map((p) => byPriority.get(p)!);
+}
+
+/** Weighted round-robin: returns next model index by weight among candidates. */
+function weightedPick(candidates: ResolvedModel[], state: SessionRouterState, random: boolean): ResolvedModel | undefined {
+  if (candidates.length === 0) return undefined;
+  if (random) {
+    const totalWeight = candidates.reduce((s, m) => s + m.weight, 0);
+    let r = Math.random() * totalWeight;
+    for (const m of candidates) {
+      r -= m.weight;
+      if (r < 0) return m;
+    }
+    return candidates[candidates.length - 1];
+  }
+  // weighted round-robin: advance cursor across a virtual weight wheel
+  const totalWeight = candidates.reduce((s, m) => s + m.weight, 0);
+  const step = state.cursor % totalWeight;
+  let acc = 0;
+  for (const m of candidates) {
+    acc += m.weight;
+    if (step < acc) {
+      state.cursor = (state.cursor + 1) % totalWeight;
+      return m;
+    }
+  }
+  state.cursor = (state.cursor + 1) % totalWeight;
+  return candidates[candidates.length - 1];
+}
+
 function pickByStrategy(
   group: RouterGroup,
   state: SessionRouterState,
   strategy: GroupStrategy
 ): string | undefined {
-  const healthy = group.models.filter((m) => {
-    const cooldown = (group.cooldown_seconds ?? 60) * 1000;
-    const s = state.models.get(m);
-    return !s || s.cooldownUntil === 0 || Date.now() >= s.cooldownUntil;
-  });
-  if (healthy.length === 0) return undefined;
+  const cooldownMs = (group.cooldown_seconds ?? 60) * 1000;
+  const tiers = groupModelsByPriority(group);
 
-  if (strategy === "random") {
-    const idx = Math.floor(Math.random() * healthy.length);
-    return healthy[idx];
+  // Walk priority tiers from highest to lowest; use the first tier that has
+  // at least one healthy model.
+  for (const tier of tiers) {
+    const healthy = tier.filter((m) => {
+      const s = state.models.get(m.id);
+      return !s || s.cooldownUntil === 0 || Date.now() >= s.cooldownUntil;
+    });
+    if (healthy.length === 0) continue;
+
+    if (strategy === "failover") {
+      // strict failover: use the first healthy model in declaration order
+      // within the highest available priority tier
+      return healthy[0].id;
+    }
+    if (strategy === "random") {
+      return weightedPick(healthy, state, true)!.id;
+    }
+    // round-robin (weighted)
+    return weightedPick(healthy, state, false)!.id;
   }
-  if (strategy === "failover") {
-    return healthy[0];
-  }
-  // round-robin: rotate within the healthy set
-  const idx = state.cursor % healthy.length;
-  state.cursor = idx + 1;
-  return healthy[idx];
+  return undefined;
 }
 
 function findModelGroup(config: RouterPluginConfig, model: string): RouterGroup | undefined {
-  return (config.groups ?? []).find((g) => g.models.includes(model));
+  return (config.groups ?? []).find((g) => g.models.some((m) => resolveModelEntry(m).id === model));
 }
 
 /**
@@ -161,28 +220,29 @@ export function planNext(
     };
   }
 
-  // Rule 3: next model in same group — pick a model that still has retry
-  // budget (failures <= maxRetries) and is not in cooldown.
-  const groupModels = failedGroup.models;
-  const failedIdx = groupModels.indexOf(failedModel);
+  // Rule 3: next model in same group — pick the next healthy candidate by
+  // priority tier (same tier first, then drop to lower tiers). A candidate
+  // must have retry budget (failures <= maxRetries) and not be in cooldown.
   const cooldownSeconds = failedGroup.cooldown_seconds ?? 60;
-  for (let i = 1; i < groupModels.length; i++) {
-    const idx = (failedIdx + i) % groupModels.length;
-    const candidate = groupModels[idx];
-    if (candidate === failedModel) continue;
-    const cState = getModelState(state, candidate);
-    const candidateRetries = failedGroup.max_retries ?? 3;
-    if (isModelInCooldown(state, candidate, cooldownSeconds)) continue;
-    if (cState.failures > candidateRetries) continue; // budget exhausted
-    state.currentModel = candidate;
-    return {
-      newModel: candidate,
-      group: failedGroup.name,
-      sameModelRetry: false,
-      withinGroupSwitch: true,
-      groupFallback: false,
-      failedModel
-    };
+  const candidateRetries = failedGroup.max_retries ?? 3;
+  const tiers = groupModelsByPriority(failedGroup);
+
+  for (const tier of tiers) {
+    for (const candidate of tier) {
+      if (candidate.id === failedModel) continue;
+      const cState = getModelState(state, candidate.id);
+      if (isModelInCooldown(state, candidate.id, cooldownSeconds)) continue;
+      if (cState.failures > candidateRetries) continue; // budget exhausted
+      state.currentModel = candidate.id;
+      return {
+        newModel: candidate.id,
+        group: failedGroup.name,
+        sameModelRetry: false,
+        withinGroupSwitch: true,
+        groupFallback: false,
+        failedModel
+      };
+    }
   }
 
   // Rule 4: move to next group

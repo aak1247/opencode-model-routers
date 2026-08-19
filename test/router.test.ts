@@ -172,3 +172,126 @@ describe("cooldown", () => {
     expect(isModelInCooldown(state, "a/x", 3600)).toBe(false);
   });
 });
+
+describe("priority tiers", () => {
+  const prioCfg: RouterPluginConfig = {
+    groups: [
+      {
+        name: "g",
+        models: [
+          { id: "p1/a", priority: 1 },
+          { id: "p1/b", priority: 1 },
+          { id: "p0/c", priority: 0 }
+        ],
+        strategy: "round-robin",
+        max_retries: 0
+      }
+    ],
+    agent_groups: { "*": ["g"] }
+  };
+
+  test("high priority tier is preferred while healthy", () => {
+    const state = createSessionState();
+    const p1 = planNext(state, prioCfg, "", undefined);
+    const p2 = planNext(state, prioCfg, "", undefined);
+    // both picks come from priority-1 tier (never p0/c)
+    expect(["p1/a", "p1/b"]).toContain(p1.newModel);
+    expect(["p1/a", "p1/b"]).toContain(p2.newModel);
+  });
+
+  test("drops to lower priority tier only when high tier is exhausted", () => {
+    const state = createSessionState();
+    // Fail p1/a and p1/b fully (max_retries=0 → switch immediately)
+    let current = planNext(state, prioCfg, "", undefined).newModel; // p1/a or p1/b
+    // fail current → should switch within tier to the other p1 model
+    markModelFailure(state, current, 0);
+    let plan = planNext(state, prioCfg, current, undefined);
+    expect(plan.withinGroupSwitch).toBe(true);
+    current = plan.newModel;
+    // fail it too → no more p1 models → drop to p0/c (still within group!)
+    markModelFailure(state, current, 0);
+    plan = planNext(state, prioCfg, current, undefined);
+    expect(plan.withinGroupSwitch).toBe(true);
+    expect(plan.newModel).toBe("p0/c");
+  });
+
+  test("weighted round-robin distributes by weight", () => {
+    const wCfg: RouterPluginConfig = {
+      groups: [
+        {
+          name: "g",
+          models: [
+            { id: "w/1", weight: 3 },
+            { id: "w/2", weight: 1 }
+          ],
+          strategy: "round-robin",
+          max_retries: 0
+        }
+      ],
+      agent_groups: { "*": ["g"] }
+    };
+    const state = createSessionState();
+    const picks: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      picks.push(planNext(state, wCfg, "", undefined).newModel);
+    }
+    // weight 3:1 over a 4-pick cycle → w/1 three times, w/2 once
+    expect(picks.filter((p) => p === "w/1").length).toBe(3);
+    expect(picks.filter((p) => p === "w/2").length).toBe(1);
+  });
+
+  test("weighted random respects weight", () => {
+    const wCfg: RouterPluginConfig = {
+      groups: [
+        {
+          name: "g",
+          models: [
+            { id: "r/1", weight: 10 },
+            { id: "r/2", weight: 1 }
+          ],
+          strategy: "random",
+          max_retries: 0
+        }
+      ],
+      agent_groups: { "*": ["g"] }
+    };
+    // Seed-heavy verification: over many samples r/1 dominates
+    const state = createSessionState();
+    let w1 = 0, w2 = 0;
+    for (let i = 0; i < 2000; i++) {
+      const s = createSessionState();
+      const p = planNext(s, wCfg, "", undefined).newModel;
+      if (p === "r/1") w1++;
+      else w2++;
+    }
+    expect(w1).toBeGreaterThan(w2 * 3); // 10:1 should be lopsided
+  });
+
+  test("failover strategy picks highest priority healthy model", () => {
+    const fCfg: RouterPluginConfig = {
+      groups: [
+        {
+          name: "g",
+          models: [
+            { id: "h/1", priority: 2 },
+            { id: "m/1", priority: 1 },
+            { id: "l/1", priority: 0 }
+          ],
+          strategy: "failover",
+          max_retries: 0
+        }
+      ],
+      agent_groups: { "*": ["g"] }
+    };
+    const state = createSessionState();
+    expect(planNext(state, fCfg, "", undefined).newModel).toBe("h/1");
+    // h/1 fails (max_retries=0 → immediate switch) → m/1
+    markModelFailure(state, "h/1", 0);
+    let p = planNext(state, fCfg, "h/1", undefined);
+    expect(p.newModel).toBe("m/1");
+    // m/1 fails → l/1
+    markModelFailure(state, "m/1", 0);
+    p = planNext(state, fCfg, "m/1", undefined);
+    expect(p.newModel).toBe("l/1");
+  });
+});

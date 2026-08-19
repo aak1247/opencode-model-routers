@@ -7,6 +7,8 @@ Put multiple models in the same **group** for load balancing and same-model retr
 ## Features
 
 - **Load balancing within a group** — `round-robin` / `random` / `failover` strategies
+- **Weighted distribution** — each model can carry a `weight` for traffic share within its tier
+- **Priority tiers** — models with higher `priority` are preferred while healthy; routing only drops to lower-priority models when the preferred tier is exhausted
 - **Same-model retry** — a model is retried `max_retries` times before switching (no instant fallback on one-off errors)
 - **Model switch within a group** — when a model exhausts its retries, the next healthy model in the group is tried
 - **Group-level fallback** — when an entire group is exhausted, the next group in the chain is used
@@ -50,12 +52,18 @@ Create `opencode-model-routers.json` in your project (`.opencode/`) or globally 
   "notify_on_fallback": true,
 
   // ─── Routing groups ───
+  // Models can be plain strings ("provider/model-id") or objects with
+  // priority and weight:
+  //   { "id": "...", "priority": 1, "weight": 2 }
+  //   priority: higher = preferred tier, tried first while healthy
+  //   weight:   relative traffic share within the same priority tier
   "groups": [
     {
       "name": "primary",
       "models": [
-        "newapi/gpt-5.6-terra",
-        "newapi/gpt-5.6-luna"
+        { "id": "newapi/gpt-5.6-luna", "priority": 2, "weight": 1 },  // preferred: fast/cheap
+        { "id": "kimi/k3",             "priority": 2, "weight": 1 },
+        { "id": "newapi/gpt-5.6-terra","priority": 1, "weight": 2 }   // fallback tier: heavy-duty
       ],
       "strategy": "round-robin",   // round-robin | random | failover
       "max_retries": 3,            // same-model retries before switching
@@ -84,13 +92,19 @@ Create `opencode-model-routers.json` in your project (`.opencode/`) or globally 
 ### How routing works
 
 ```
-Request → primary group → pick model (round-robin/random/failover)
+Request → primary group → pick highest available priority tier
+                            └─ within tier: weighted round-robin / random / failover
           ├─ success → done
           └─ failure → retry SAME model up to max_retries
-                       └─ still failing → next model in group
-                                          └─ group exhausted → next group in chain
-                                                               └─ chain exhausted → error surfaced
+                       └─ still failing → next model in tier (weighted)
+                                          └─ tier exhausted → next lower tier
+                                                             └─ group exhausted → next group in chain
+                                                                                └─ chain exhausted → error surfaced
 ```
+
+Priority tiers make routing cost-aware: keep cheap/fast models at `priority: 2`
+and only fall through to expensive/heavy models at `priority: 1` when the
+preferred tier is down.
 
 ### Legacy config compatibility
 
