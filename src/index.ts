@@ -71,7 +71,7 @@ function parseModelId(model: string): { providerID: string; modelID: string } {
   return { providerID: parts[0], modelID: parts.slice(1).join("/") };
 }
 
-export const server: Plugin = async ({ client, directory }) => {
+export const serverPlugin: Plugin = async ({ client, directory }) => {
   const fileConfig = loadConfig(directory);
   const sessions: SessionMap = new Map();
 
@@ -281,4 +281,9 @@ export const server: Plugin = async ({ client, directory }) => {
   };
 };
 
-export default server;
+const pluginManifest = {
+  id: "opencode-model-routers",
+  server: serverPlugin
+};
+
+export default pluginManifest;
