@@ -3,10 +3,9 @@
  *
  * Log file: ~/.config/opencode/opencode-model-routers.log
  * Rotation: when the log exceeds MAX_LOG_BYTES (default 100 MiB), the current
- * file is renamed to opencode-model-routers.log.1 (previous .1 is discarded)
- * and a fresh file is started.
+ * file is discarded (old data deleted) and a fresh file is started.
  */
-import { appendFileSync, mkdirSync, statSync, renameSync, existsSync, unlinkSync } from "fs";
+import { appendFileSync, mkdirSync, statSync, unlinkSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 
@@ -30,11 +29,8 @@ function rotateIfNeeded(): void {
     if (!existsSync(LOG_FILE)) return;
     const stats = statSync(LOG_FILE);
     if (stats.size < MAX_LOG_BYTES) return;
-    const rotated = `${LOG_FILE}.1`;
-    try {
-      if (existsSync(rotated)) unlinkSync(rotated);
-    } catch {}
-    renameSync(LOG_FILE, rotated);
+    // Discard the old log file entirely and start fresh.
+    unlinkSync(LOG_FILE);
   } catch {
     // best effort — if rotation fails, keep appending
   }

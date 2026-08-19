@@ -16,7 +16,7 @@ Put multiple models in the same **group** for load balancing and same-model retr
 - **Cooldown & auto-recovery** — failed models cool down, then rejoin rotation
 - **TTFT timeout** — aborts models that produce no first token within `timeout_seconds`; streaming models are never interrupted
 - **Toast notifications** — on model/group switches
-- **File logging with rotation** — every routing decision, retry, switch, fallback and error is written to `~/.config/opencode/opencode-model-routers.log`, auto-rotated at 100 MiB (override with `OPENCODE_MODEL_ROUTERS_LOG_MAX_BYTES`)
+- **File logging with rotation** — every routing decision, retry, switch, fallback and error is written to `~/.config/opencode/opencode-model-routers.log`, auto-rotated at 100 MiB (old data discarded; override with `OPENCODE_MODEL_ROUTERS_LOG_MAX_BYTES`)
 
 ## Installation
 
@@ -122,7 +122,7 @@ All routing activity is logged to `~/.config/opencode/opencode-model-routers.log
 - Re-dispatch acceptance/failure
 - Chain exhaustion and errors
 
-The log auto-rotates at **100 MiB** by default (current file → `.log.1`, older discarded). Override the cap with the `OPENCODE_MODEL_ROUTERS_LOG_MAX_BYTES` environment variable (bytes; `0` disables rotation).
+The log auto-rotates at **100 MiB** by default: once the cap is reached the old log is **deleted** and a fresh file starts. Override the cap with the `OPENCODE_MODEL_ROUTERS_LOG_MAX_BYTES` environment variable (bytes; `0` disables rotation).
 
 ## Development
 
