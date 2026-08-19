@@ -16,8 +16,7 @@ import {
 } from "./router";
 import type { RouterPluginConfig, SessionRouterState, RouterPlan } from "./types";
 import { DEFAULT_CONFIG } from "./types";
-
-const PLUGIN_NAME = "opencode-model-routers";
+import { logger } from "./logger";
 
 type SessionMap = Map<string, SessionRouterState>;
 
@@ -76,6 +75,20 @@ export const server: Plugin = async ({ client, directory }) => {
   const fileConfig = loadConfig(directory);
   const sessions: SessionMap = new Map();
 
+  logger.info("Plugin initialized", {
+    directory,
+    enabled: fileConfig.enabled,
+    groups: (fileConfig.groups ?? []).map((g) => ({
+      name: g.name,
+      models: g.models.map((m) => (typeof m === "string" ? m : m.id)),
+      strategy: g.strategy ?? "round-robin",
+      max_retries: g.max_retries ?? 3,
+      timeout_seconds: g.timeout_seconds ?? 180
+    })),
+    agent_groups: fileConfig.agent_groups,
+    max_group_fallbacks: fileConfig.max_group_fallbacks ?? 3
+  });
+
   const getSessionState = (sessionID: string): SessionRouterState => {
     let s = sessions.get(sessionID);
     if (!s) {
@@ -123,7 +136,7 @@ export const server: Plugin = async ({ client, directory }) => {
         }
       }
       if (!lastUser) {
-        console.log(`[${PLUGIN_NAME}] No user message to replay for session ${sessionID}`);
+        logger.warn("No user message to replay", { sessionID, model: newModel, agent });
         return false;
       }
       const parts = lastUser.parts ?? [];
@@ -136,19 +149,37 @@ export const server: Plugin = async ({ client, directory }) => {
         },
         query: { directory }
       });
+      logger.info("Re-dispatch accepted by host", {
+        sessionID,
+        model: newModel,
+        agent,
+        sameModelRetry: plan.sameModelRetry,
+        withinGroupSwitch: plan.withinGroupSwitch,
+        groupFallback: plan.groupFallback
+      });
       return true;
     } catch (err) {
-      console.error(`[${PLUGIN_NAME}] Re-dispatch failed for session ${sessionID}:`, err);
+      logger.error("Re-dispatch failed", { sessionID, model: newModel, agent, error: String(err) });
       return false;
     }
   };
 
   const notifySwitch = async (plan: RouterPlan, agent: string | undefined, attempt: number) => {
+    const kind = plan.groupFallback ? "group-fallback" : plan.withinGroupSwitch ? "model-switch" : "same-model-retry";
+    logger.info("Routing decision", {
+      sessionID: plan.failedModel ? "?" : "(initial)",
+      from: plan.failedModel || "(start)",
+      to: plan.newModel,
+      group: plan.group,
+      kind,
+      agent,
+      attempt
+    });
     if (!fileConfig.notify_on_fallback) return;
-    const kind = plan.groupFallback ? "Group Fallback" : plan.withinGroupSwitch ? "Model Switch" : "Retry";
+    const displayKind = plan.groupFallback ? "Group Fallback" : plan.withinGroupSwitch ? "Model Switch" : "Retry";
     const from = plan.failedModel ? plan.failedModel.split("/").pop() : "start";
     const to = plan.newModel.split("/").pop() ?? plan.newModel;
-    await showToast(kind, `${from} → ${to} (${agent ?? "?"} · attempt ${attempt})`);
+    await showToast(displayKind, `${from} → ${to} (${agent ?? "?"} · attempt ${attempt})`);
   };
 
   const handleFailure = async (
@@ -156,20 +187,35 @@ export const server: Plugin = async ({ client, directory }) => {
     agent: string | undefined,
     error: unknown
   ) => {
-    if (!fileConfig.enabled) return;
-    if (!isRetryableError(error, fileConfig)) return;
+    if (!fileConfig.enabled) {
+      logger.debug("Plugin disabled, ignoring failure", { sessionID, agent });
+      return;
+    }
+    if (!isRetryableError(error, fileConfig)) {
+      logger.debug("Non-retryable error, ignoring", {
+        sessionID,
+        agent,
+        error: String((error as any)?.message ?? error).slice(0, 300)
+      });
+      return;
+    }
 
     const state = getSessionState(sessionID);
     const failedModel = state.currentModel;
     if (!failedModel) return;
 
-    // Mark failure (cooldown applied; router's same-model retry branch resets failures on success)
     const failedGroup = (fileConfig.groups ?? []).find((g) => g.models.includes(failedModel));
     const cooldown = failedGroup?.cooldown_seconds ?? 60;
     markModelFailure(state, failedModel, cooldown);
 
     const plan = planNext(state, fileConfig, failedModel, agent);
     if (plan.exhausted || !plan.newModel) {
+      logger.error("All models exhausted", {
+        sessionID,
+        agent,
+        failedModel,
+        groupFallbacks: state.groupFallbacks
+      });
       await showToast("All Models Exhausted", `No model available for session ${sessionID}`, "error");
       return;
     }
@@ -177,6 +223,7 @@ export const server: Plugin = async ({ client, directory }) => {
     const ok = await redispatch(sessionID, plan.newModel, agent, plan);
     if (!ok) {
       // re-dispatch failed — treat as another failure to continue chain
+      logger.warn("Re-dispatch failed, continuing chain", { sessionID, failedModel: plan.newModel, agent });
       await handleFailure(sessionID, agent, new Error("re-dispatch failed"));
     }
   };
@@ -190,6 +237,7 @@ export const server: Plugin = async ({ client, directory }) => {
       resetSessionFailures(state);
       // clear currentModel failure tracking — done via markModelSuccess
       state.currentModel = modelId;
+      logger.debug("Model success recorded", { sessionID, model: modelId });
     }
   };
 
@@ -217,14 +265,17 @@ export const server: Plugin = async ({ client, directory }) => {
           case "session.idle": {
             const props = e?.properties ?? {};
             const sessionID = props.sessionID;
-            if (sessionID) sessions.delete(sessionID);
+            if (sessionID) {
+              sessions.delete(sessionID);
+              logger.debug("Session state cleared", { sessionID, reason: e.type });
+            }
             break;
           }
           default:
             break;
         }
       } catch (err) {
-        console.error(`[${PLUGIN_NAME}] event handler error:`, err);
+        logger.error("Event handler error", { error: String(err) });
       }
     }
   };
