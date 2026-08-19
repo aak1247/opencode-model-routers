@@ -1,0 +1,47 @@
+{
+  "name": "opencode-model-routers",
+  "version": "0.1.0",
+  "description": "Group-based model routing, load balancing, retry and fallback plugin for OpenCode. Multiple models can be placed in the same group for load balancing/retry, with group-level fallback chains.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/"
+  ],
+  "keywords": [
+    "opencode",
+    "plugin",
+    "model",
+    "routing",
+    "load-balancing",
+    "fallback",
+    "retry",
+    "ai"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.1.19",
+    "@opencode-ai/sdk": ">=1.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/sdk": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "build": "bun run build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.18.16",
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.7.3"
+  }
+}
