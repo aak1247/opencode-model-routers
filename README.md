@@ -1,12 +1,9 @@
 # opencode-model-routers
 
-[![npm version](https://img.shields.io/npm/v/opencode-model-routers.svg)](https://www.npmjs.com/package/opencode-model-routers)
-[![npm downloads](https://img.shields.io/npm/dm/opencode-model-routers.svg)](https://www.npmjs.com/package/opencode-model-routers)
-[![GitHub release](https://img.shields.io/github/v/release/aak1247/opencode-model-routers.svg)](https://github.com/aak1247/opencode-model-routers/releases)
-[![GitHub license](https://img.shields.io/github/license/aak1247/opencode-model-routers.svg)](https://github.com/aak1247/opencode-model-routers/blob/main/LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/aak1247/opencode-model-routers.svg)](https://github.com/aak1247/opencode-model-routers)
-[![GitHub issues](https://img.shields.io/github/issues/aak1247/opencode-model-routers.svg)](https://github.com/aak1247/opencode-model-routers/issues)
-[![Bundle size](https://img.shields.io/bundlephobia/min/opencode-model-routers.svg)](https://bundlephobia.com/package/opencode-model-routers)
+[![npm version](https://img.shields.io/npm/v/opencode-model-routers?cacheSeconds=3600)](https://www.npmjs.com/package/opencode-model-routers)
+[![GitHub tag](https://img.shields.io/github/v/tag/aak1247/opencode-model-routers?cacheSeconds=3600)](https://github.com/aak1247/opencode-model-routers/releases)
+[![GitHub license](https://img.shields.io/github/license/aak1247/opencode-model-routers?cacheSeconds=3600)](https://github.com/aak1247/opencode-model-routers/blob/main/LICENSE)
+[![GitHub issues](https://img.shields.io/github/issues/aak1247/opencode-model-routers?cacheSeconds=3600)](https://github.com/aak1247/opencode-model-routers/issues)
 [![Test status](https://img.shields.io/badge/tests-13%20passed-brightgreen.svg)](#development)
 
 Group-based model routing, load balancing, retry and fallback plugin for [OpenCode](https://github.com/sst/opencode).
