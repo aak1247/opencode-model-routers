@@ -1,5 +1,14 @@
 # opencode-model-routers
 
+[![npm version](https://img.shields.io/npm/v/opencode-model-routers.svg)](https://www.npmjs.com/package/opencode-model-routers)
+[![npm downloads](https://img.shields.io/npm/dm/opencode-model-routers.svg)](https://www.npmjs.com/package/opencode-model-routers)
+[![GitHub release](https://img.shields.io/github/v/release/aak1247/opencode-model-routers.svg)](https://github.com/aak1247/opencode-model-routers/releases)
+[![GitHub license](https://img.shields.io/github/license/aak1247/opencode-model-routers.svg)](https://github.com/aak1247/opencode-model-routers/blob/main/LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/aak1247/opencode-model-routers.svg)](https://github.com/aak1247/opencode-model-routers)
+[![GitHub issues](https://img.shields.io/github/issues/aak1247/opencode-model-routers.svg)](https://github.com/aak1247/opencode-model-routers/issues)
+[![Bundle size](https://img.shields.io/bundlephobia/min/opencode-model-routers.svg)](https://bundlephobia.com/package/opencode-model-routers)
+[![Test status](https://img.shields.io/badge/tests-13%20passed-brightgreen.svg)](#development)
+
 Group-based model routing, load balancing, retry and fallback plugin for [OpenCode](https://github.com/sst/opencode).
 
 Put multiple models in the same **group** for load balancing and same-model retry; chain groups together for **group-level fallback**. Each agent can have its own group chain.
@@ -112,6 +121,33 @@ preferred tier is down.
 If you previously used `@razroo/opencode-model-fallback`, the plugin also reads
 `opencode-model-fallback.json` as a fallback (its `fallback_models` list is treated
 as a single `default` group).
+
+## Model Group Management Command
+
+Manage routing groups from inside opencode with `/model-groups` (or via the bundled CLI script).
+
+```bash
+# Install the command (global)
+mkdir -p ~/.config/opencode/command ~/.config/opencode/scripts
+cp scripts/model-groups.mjs ~/.config/opencode/scripts/
+cp command/model-groups.md ~/.config/opencode/command/
+```
+
+Then in the TUI run `/model-groups`, or use the CLI directly:
+
+```bash
+node ~/.config/opencode/scripts/model-groups.mjs ls                                   # list all groups
+node ~/.config/opencode/scripts/model-groups.mjs show <group>                         # show one group
+node ~/.config/opencode/scripts/model-groups.mjs add <group> <model> [--priority N] [--weight N]
+node ~/.config/opencode/scripts/model-groups.mjs remove <group> <model>
+node ~/.config/opencode/scripts/model-groups.mjs rename <old> <new>
+node ~/.config/opencode/scripts/model-groups.mjs edit <group> --strategy <s> [--max-retries N] [--timeout N] [--cooldown N]
+node ~/.config/opencode/scripts/model-groups.mjs set-agent <agent> <group1,group2,...>
+node ~/.config/opencode/scripts/model-groups.mjs use <group> [--append]              # set default group chain
+```
+
+Editing a member = `remove` + `add` (re-add with new `--priority` / `--weight`).
+After any edit, restart opencode (or start a new session) for the router to pick it up.
 
 ## Logs
 
