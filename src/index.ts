@@ -412,15 +412,31 @@ export const serverPlugin: Plugin = async ({ client, directory }) => {
             }
             break;
           }
-          case "session.compacted":
           case "session.idle": {
+            // Idle fires between EVERY step (tool calls, internal retries,
+            // our own re-dispatch). Only clear per-request watchdog state;
+            // KEEP router state (currentModel, failure counters, cooldowns)
+            // so a re-dispatch that fails again continues down the fallback
+            // chain instead of silently starting fresh (currentModel="" would
+            // make handleFailure ignore the failure).
+            const props = e?.properties ?? {};
+            const sessionID = props.sessionID;
+            if (sessionID) {
+              clearTtftTimer(sessionID);
+              sessionFirstToken.delete(sessionID);
+              logger.debug("Session watchdog state cleared (idle)", { sessionID });
+            }
+            break;
+          }
+          case "session.compacted": {
+            // Compaction = fresh context; reset all session state.
             const props = e?.properties ?? {};
             const sessionID = props.sessionID;
             if (sessionID) {
               clearTtftTimer(sessionID);
               sessionFirstToken.delete(sessionID);
               sessions.delete(sessionID);
-              logger.debug("Session state cleared", { sessionID, reason: e.type });
+              logger.debug("Session state cleared (compacted)", { sessionID });
             }
             break;
           }
