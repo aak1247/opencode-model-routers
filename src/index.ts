@@ -44,6 +44,31 @@ function extractErrorMessage(error: unknown): string {
   return String(msg ?? error ?? "");
 }
 
+/**
+ * Permanent errors never succeed on retry (quota/usage limits, model not found,
+ * auth issues). They should skip same-model retries and route immediately.
+ */
+function isPermanentError(error: unknown): boolean {
+  const status = (error as any)?.data?.statusCode ?? (error as any)?.statusCode;
+  if (typeof status === "number" && [401, 402, 403].includes(status)) return true;
+  const msg = extractErrorMessage(error);
+  const patterns = [
+    /使用上限/i,
+    /配额/i,
+    /重置/i,
+    /已达到/i,
+    /超出.*(?:限额|额度)/i,
+    /余额不足/i,
+    /model not found/i,
+    /model not supported/i,
+    /model is not available/i,
+    /quota.?exceeded/i,
+    /insufficient.?(?:credits?|funds?|balance)/i,
+    /credit.*balance.*too.*low/i
+  ];
+  return patterns.some((p) => p.test(msg));
+}
+
 function isRetryableError(error: unknown, cfg: RouterPluginConfig): boolean {
   const retryOn = cfg.retry_on_errors ?? DEFAULT_CONFIG.retry_on_errors;
   const status = extractStatusCode(error, retryOn);
@@ -236,7 +261,10 @@ export const serverPlugin: Plugin = async ({ client, directory }) => {
     const cooldown = failedGroup?.cooldown_seconds ?? 60;
     markModelFailure(state, failedModel, cooldown);
 
-    const plan = planNext(state, fileConfig, failedModel, agent);
+    // Permanent errors (quota/usage-limit/model-not-found) skip same-model
+    // retries: retrying a permanently failing model is wasted work.
+    const skipSameModelRetry = isPermanentError(error);
+    const plan = planNext(state, fileConfig, failedModel, agent, Date.now(), { skipSameModelRetry });
     if (plan.exhausted || !plan.newModel) {
       logger.error("All models exhausted", {
         sessionID,
@@ -370,9 +398,13 @@ export const serverPlugin: Plugin = async ({ client, directory }) => {
           }
           case "message.part.updated":
           case "message.part.delta": {
-            // Any part activity counts as "first token received" for the TTFT watchdog.
+            // Any real content activity counts as "first token received" for
+            // the TTFT watchdog. Error-type parts do NOT count — a provider
+            // that embeds its failure as an error part must still be routed.
             const props = e?.properties ?? {};
-            const sessionID = props.sessionID ?? props.part?.sessionID ?? props.info?.sessionID;
+            const part = props.part ?? props.info?.part;
+            if (part?.type === "error") break;
+            const sessionID = props.sessionID ?? part?.sessionID ?? props.info?.sessionID;
             if (sessionID && !sessionFirstToken.get(sessionID)) {
               sessionFirstToken.set(sessionID, true);
               clearTtftTimer(sessionID);

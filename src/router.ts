@@ -174,7 +174,8 @@ export function planNext(
   config: RouterPluginConfig,
   failedModel: string,
   agent: string | undefined,
-  now: number = Date.now()
+  now: number = Date.now(),
+  opts: { skipSameModelRetry?: boolean } = {}
 ): RouterPlan {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const chain = getGroupChain(cfg, agent);
@@ -208,7 +209,9 @@ export function planNext(
   // after its first failure (total attempts = 1 + max_retries).
   // `failures` counts completed failures; while it is <= max_retries we retry
   // the same model, and only after exceeding it do we move on.
-  if (failedState.failures <= maxRetries) {
+  // Permanent errors (quota/usage-limit/model-not-found) skip same-model retry
+  // via opts.skipSameModelRetry — retrying a permanently failing model is wasted work.
+  if (!opts.skipSameModelRetry && failedState.failures <= maxRetries) {
     // Keep same model (do not mark cooldown yet — will be applied on final failure)
     return {
       newModel: failedModel,
