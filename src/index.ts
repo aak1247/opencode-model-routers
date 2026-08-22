@@ -355,10 +355,11 @@ export const serverPlugin: Plugin = async ({ client, directory }) => {
       // Without this, state.currentModel stays "" and handleFailure ignores errors.
       try {
         const state = getSessionState(sessionID);
-        // model: { id, providerID, ... }; id is the modelID portion (e.g. "GLM-5.2")
-        const modelId = model
-          ? (model.id?.includes("/") ? model.id : `${model.providerID}/${model.id}`)
-          : state.currentModel;
+        // Full opencode model reference is always providerID/modelID.
+        // Model keys may themselves contain slashes (e.g. commandcode's
+        // "deepseek/deepseek-v4-flash"), so NEVER use model.id alone —
+        // always prefix with providerID or group matching breaks.
+        const modelId = model ? `${model.providerID}/${model.id}` : state.currentModel;
         if (modelId) {
           state.currentModel = modelId;
           logger.debug("Request model recorded", { sessionID, agent, model: modelId });
