@@ -26,16 +26,29 @@ function extractStatusCode(error: unknown, retryOnErrors: number[]): number | un
     (error as any)?.status ??
     (error as any)?.statusCode ??
     (error as any)?.response?.status ??
-    (error as any)?.error?.statusCode;
+    (error as any)?.error?.statusCode ??
+    // opencode ApiError shape: { data: { statusCode } }
+    (error as any)?.data?.statusCode ??
+    (error as any)?.error?.data?.statusCode;
   if (typeof status === "number" && retryOnErrors.includes(status)) return status;
   return undefined;
+}
+
+function extractErrorMessage(error: unknown): string {
+  const msg =
+    (error as any)?.message ??
+    (error as any)?.data?.message ??
+    (error as any)?.error?.message ??
+    (error as any)?.error?.data?.message ??
+    "";
+  return String(msg ?? error ?? "");
 }
 
 function isRetryableError(error: unknown, cfg: RouterPluginConfig): boolean {
   const retryOn = cfg.retry_on_errors ?? DEFAULT_CONFIG.retry_on_errors;
   const status = extractStatusCode(error, retryOn);
   if (status !== undefined) return true;
-  const msg = String((error as any)?.message ?? error ?? "");
+  const msg = extractErrorMessage(error);
   const patterns = [
     /rate.?limit/i,
     /too.?many.?requests/i,
@@ -51,7 +64,15 @@ function isRetryableError(error: unknown, cfg: RouterPluginConfig): boolean {
     /insufficient.?(?:credits?|funds?|balance)/i,
     /model not found/i,
     /model not supported/i,
-    /model is not available/i
+    /model is not available/i,
+    // Chinese error messages (quota/rate limits etc.)
+    /使用上限/i,
+    /配额/i,
+    /重置/i,
+    /已达到/i,
+    /超出.*(?:限额|额度)/i,
+    /余额不足/i,
+    /次数限制/i
   ];
   for (const p of patterns) {
     if (p.test(msg)) return true;
@@ -204,7 +225,9 @@ export const serverPlugin: Plugin = async ({ client, directory }) => {
     const failedModel = state.currentModel;
     if (!failedModel) return;
 
-    const failedGroup = (fileConfig.groups ?? []).find((g) => g.models.includes(failedModel));
+    const failedGroup = (fileConfig.groups ?? []).find((g) =>
+      (g.models ?? []).some((m) => (typeof m === "string" ? m : m.id) === failedModel)
+    );
     const cooldown = failedGroup?.cooldown_seconds ?? 60;
     markModelFailure(state, failedModel, cooldown);
 
@@ -242,6 +265,23 @@ export const serverPlugin: Plugin = async ({ client, directory }) => {
   };
 
   return {
+    "chat.params": async ({ sessionID, agent, model }) => {
+      // Record the model each request starts with, so failures can be routed.
+      // Without this, state.currentModel stays "" and handleFailure ignores errors.
+      try {
+        const state = getSessionState(sessionID);
+        // model: { id, providerID, ... }; id is the modelID portion (e.g. "GLM-5.2")
+        const modelId = model
+          ? (model.id?.includes("/") ? model.id : `${model.providerID}/${model.id}`)
+          : state.currentModel;
+        if (modelId) {
+          state.currentModel = modelId;
+          logger.debug("Request model recorded", { sessionID, agent, model: modelId });
+        }
+      } catch (err) {
+        logger.error("chat.params error", { error: String(err) });
+      }
+    },
     event: async ({ event }) => {
       try {
         const e = event as any;
@@ -252,12 +292,15 @@ export const serverPlugin: Plugin = async ({ client, directory }) => {
             break;
           }
           case "message.updated": {
-            // Detect completion of a message with an error
+            // Detect completion of a message with an error.
+            // SDK shape: EventMessageUpdated = { type, properties: { info: Message } }
+            // Message (AssistantMessage) carries error?: ApiError | ...
             const props = e?.properties ?? {};
-            const msg = props.message ?? props;
-            if (msg?.info?.error) {
-              const error = msg.info.error;
-              await handleFailure(props.sessionID, props.agent ?? msg.info?.agent, error);
+            const msg = props.info ?? props.message ?? props;
+            const error = msg?.error ?? msg?.info?.error;
+            if (error) {
+              const agent = props.agent ?? msg?.agent ?? msg?.info?.agent;
+              await handleFailure(props.sessionID, agent, error);
             }
             break;
           }
