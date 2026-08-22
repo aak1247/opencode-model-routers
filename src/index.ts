@@ -119,6 +119,11 @@ export const serverPlugin: Plugin = async ({ client, directory }) => {
     return s;
   };
 
+  // TTFT watchdog state: per-session first-token flags, armed timers, last agent
+  const sessionFirstToken = new Map<string, boolean>();
+  const sessionTtftTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const sessionAgent = new Map<string, string | undefined>();
+
   const showToast = async (title: string, message: string, variant: "warning" | "info" | "success" | "error" = "warning") => {
     try {
       await client.tui?.showToast({
@@ -251,6 +256,58 @@ export const serverPlugin: Plugin = async ({ client, directory }) => {
     }
   };
 
+  // ─── TTFT watchdog ────────────────────────────────────────────────────────
+  // Catches requests that fail without opencode ever surfacing an error event
+  // (e.g. provider quota errors swallowed by internal retries): arm a timer on
+  // each request; if no message part arrives within ttft_timeout_seconds,
+  // abort the request and route to the next model/group.
+  const findGroupOfModel = (modelId: string) =>
+    (fileConfig.groups ?? []).find((g) =>
+      (g.models ?? []).some((m) => (typeof m === "string" ? m : m.id) === modelId)
+    );
+
+  const clearTtftTimer = (sessionID: string) => {
+    const t = sessionTtftTimers.get(sessionID);
+    if (t) {
+      clearTimeout(t);
+      sessionTtftTimers.delete(sessionID);
+    }
+  };
+
+  const armTtftWatchdog = (sessionID: string, agent: string | undefined, modelId: string) => {
+    clearTtftTimer(sessionID);
+    if (!fileConfig.enabled) return;
+    // Only watch models we can actually route (member of some group).
+    if (!findGroupOfModel(modelId)) return;
+    const timeoutSec = fileConfig.ttft_timeout_seconds ?? DEFAULT_CONFIG.ttft_timeout_seconds;
+    if (!timeoutSec || timeoutSec <= 0) return;
+    sessionFirstToken.set(sessionID, false);
+    if (agent !== undefined) sessionAgent.set(sessionID, agent);
+    const timer = setTimeout(() => {
+      sessionTtftTimers.delete(sessionID);
+      if (sessionFirstToken.get(sessionID)) return;
+      logger.warn("TTFT timeout, treating request as failed", {
+        sessionID,
+        agent,
+        model: modelId,
+        timeoutSeconds: timeoutSec
+      });
+      void (async () => {
+        try {
+          await client.session.abort({ path: { id: sessionID } });
+        } catch {
+          // abort is best-effort
+        }
+        await handleFailure(
+          sessionID,
+          agent ?? sessionAgent.get(sessionID),
+          new Error(`TTFT timeout: no first token within ${timeoutSec}s`)
+        );
+      })();
+    }, timeoutSec * 1000);
+    sessionTtftTimers.set(sessionID, timer);
+  };
+
   const handleSuccess = async (sessionID: string, modelId?: string) => {
     const state = sessions.get(sessionID);
     if (!state) return;
@@ -278,6 +335,8 @@ export const serverPlugin: Plugin = async ({ client, directory }) => {
           state.currentModel = modelId;
           logger.debug("Request model recorded", { sessionID, agent, model: modelId });
         }
+        if (agent !== undefined) sessionAgent.set(sessionID, agent);
+        if (modelId) armTtftWatchdog(sessionID, agent, modelId);
       } catch (err) {
         logger.error("chat.params error", { error: String(err) });
       }
@@ -298,9 +357,26 @@ export const serverPlugin: Plugin = async ({ client, directory }) => {
             const props = e?.properties ?? {};
             const msg = props.info ?? props.message ?? props;
             const error = msg?.error ?? msg?.info?.error;
-            if (error) {
+            // Some providers embed failures as error-type parts instead of info.error
+            const parts = props.parts ?? msg?.parts;
+            const errorPart = Array.isArray(parts)
+              ? parts.find((p: any) => p?.type === "error")
+              : undefined;
+            if (error || errorPart) {
               const agent = props.agent ?? msg?.agent ?? msg?.info?.agent;
-              await handleFailure(props.sessionID, agent, error);
+              await handleFailure(props.sessionID ?? msg?.sessionID, agent, error ?? errorPart);
+            }
+            break;
+          }
+          case "message.part.updated":
+          case "message.part.delta": {
+            // Any part activity counts as "first token received" for the TTFT watchdog.
+            const props = e?.properties ?? {};
+            const sessionID = props.sessionID ?? props.part?.sessionID ?? props.info?.sessionID;
+            if (sessionID && !sessionFirstToken.get(sessionID)) {
+              sessionFirstToken.set(sessionID, true);
+              clearTtftTimer(sessionID);
+              logger.debug("First token received", { sessionID });
             }
             break;
           }
@@ -309,6 +385,8 @@ export const serverPlugin: Plugin = async ({ client, directory }) => {
             const props = e?.properties ?? {};
             const sessionID = props.sessionID;
             if (sessionID) {
+              clearTtftTimer(sessionID);
+              sessionFirstToken.delete(sessionID);
               sessions.delete(sessionID);
               logger.debug("Session state cleared", { sessionID, reason: e.type });
             }

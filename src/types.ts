@@ -90,13 +90,21 @@ export interface RouterPluginConfig {
   agent_groups?: AgentGroupBinding;
   /** Whether a new session starts with the same group chain state or fresh. Default: true (fresh). */
   fresh_state_per_session?: boolean;
+  /**
+   * Time-to-first-token watchdog in seconds. After each request the plugin arms
+   * a timer; if no message part arrives within this window, the request is
+   * treated as failed (abort + route to next model/group). This catches errors
+   * that opencode never surfaces as events (e.g. provider quota errors that
+   * fail silently during internal retries). Default: 60. 0 disables.
+   */
+  ttft_timeout_seconds?: number;
 }
 
 export const DEFAULT_RETRY_ON_ERRORS = [401, 402, 429, 500, 502, 503, 504];
 
 export const DEFAULT_CONFIG: Required<Pick<
   RouterPluginConfig,
-  "enabled" | "retry_on_errors" | "retryable_error_patterns" | "max_group_fallbacks" | "notify_on_fallback" | "groups" | "agent_groups" | "fresh_state_per_session"
+  "enabled" | "retry_on_errors" | "retryable_error_patterns" | "max_group_fallbacks" | "notify_on_fallback" | "groups" | "agent_groups" | "fresh_state_per_session" | "ttft_timeout_seconds"
 >> = {
   enabled: true,
   retry_on_errors: DEFAULT_RETRY_ON_ERRORS,
@@ -105,7 +113,8 @@ export const DEFAULT_CONFIG: Required<Pick<
   notify_on_fallback: true,
   groups: [],
   agent_groups: {},
-  fresh_state_per_session: true
+  fresh_state_per_session: true,
+  ttft_timeout_seconds: 60
 };
 
 /** Mutable per-model runtime state. */

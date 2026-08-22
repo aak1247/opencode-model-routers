@@ -21,6 +21,7 @@ Put multiple models in the same **group** for load balancing and same-model retr
 - **Per-agent group chains** — bind different group chains to different agents (`*` for default)
 - **Cooldown & auto-recovery** — failed models cool down, then rejoin rotation
 - **TTFT timeout** — aborts models that produce no first token within `timeout_seconds`; streaming models are never interrupted
+- **Silent-failure watchdog** — some providers fail without opencode ever surfacing an error event (e.g. quota errors swallowed by internal retries). The plugin arms a per-request timer (`ttft_timeout_seconds`, default 60s): if no message part arrives in time it aborts the request and routes to the next model/group
 - **Toast notifications** — on model/group switches
 - **File logging with rotation** — every routing decision, retry, switch, fallback and error is written to `~/.config/opencode/opencode-model-routers.log`, auto-rotated at 100 MiB (old data discarded; override with `OPENCODE_MODEL_ROUTERS_LOG_MAX_BYTES`)
 
